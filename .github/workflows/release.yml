@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*.*.*'
+      - 'v*'
   workflow_dispatch:
 
 concurrency:
@@ -18,12 +18,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: 'macos-latest'
-            args: '--target aarch64-apple-darwin'
-          - platform: 'ubuntu-24.04'
+          - platform: 'ubuntu-22.04'
             args: ''
+            rust_targets: ''
+          - platform: 'ubuntu-22.04-arm'
+            args: ''
+            rust_targets: ''
           - platform: 'windows-latest'
             args: ''
+            rust_targets: ''
+          - platform: 'macos-latest'
+            args: '--target aarch64-apple-darwin'
+            rust_targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
+          - platform: 'macos-latest'
+            args: '--target x86_64-apple-darwin'
+            rust_targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -34,10 +43,10 @@ jobs:
         with:
           version: 10
 
-      - name: Setup Node.js
+      - name: Setup Node.js LTS
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: 'lts/*'
           cache: 'pnpm'
 
       - name: Install frontend dependencies
@@ -46,35 +55,49 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.rust_targets }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: 'src-tauri -> target'
+          key: ${{ matrix.platform }}-${{ matrix.args }}
 
       - name: Install system dependencies (Linux)
-        if: matrix.platform == 'ubuntu-24.04'
+        if: contains(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev
 
       - name: Build and publish
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: v__VERSION__
+          tagName: nexus-v__VERSION__
           releaseName: 'NEXUS v__VERSION__'
           releaseBody: |
-            ## NEXUS — AI Workstation Builder v__VERSION__
+            ## NEXUS - AI Orchestration Hub v__VERSION__
+
+            ### Changes
+            See [CHANGELOG.md](https://github.com/ork-station/nexus/blob/main/CHANGELOG.md) for full details.
 
             ### Downloads
-            - **Linux**: `.AppImage` or `.deb`
-            - **Windows**: `.msi` or `.exe`
-            - **macOS**: `.dmg` (Apple Silicon)
+            | Platform | Architecture | Format |
+            |----------|-------------|--------|
+            | Linux | x64 | `.AppImage`, `.deb` |
+            | Linux | arm64 | `.AppImage`, `.deb` |
+            | Windows | x64 | `.msi`, `.exe` |
+            | macOS | Apple Silicon (aarch64) | `.dmg` |
+            | macOS | Intel (x86_64) | `.dmg` |
 
-            See [CHANGELOG.md](https://github.com/ork-station/nexus/blob/main/CHANGELOG.md) for details.
+            ### Checksums
+            See the attached `checksums.txt` for SHA256 verification.
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}

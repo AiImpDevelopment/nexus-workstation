@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://localhost:* ws://localhost:* https://*.anthropic.com https://*.openai.com https://api.github.com; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; connect-src 'self' http://localhost:* ws://localhost:* https://*.anthropic.com https://*.openai.com https://api.github.com https://openrouter.ai; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-src http://localhost:*"
     }
   },
   "bundle": {
@@ -38,13 +38,33 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "category": "DeveloperTool",
+    "shortDescription": "Your complete AI stack. One desktop app.",
+    "longDescription": "NEXUS AI Workstation — Chat with 28+ free AI models, manage Docker containers, orchestrate agents, automate workflows, and write code.",
     "linux": {
       "appimage": {
         "bundleMediaFramework": false
       },
       "deb": {
-        "depends": []
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "libappindicator3-1",
+          "librsvg2-2"
+        ],
+        "section": "devel"
       }
+    },
+    "windows": {
+      "nsis": {
+        "displayLanguageSelector": true,
+        "installMode": "currentUser"
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "signingIdentity": null,
+      "entitlements": null
     }
   },
   "plugins": {

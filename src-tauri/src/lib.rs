@@ -13,6 +13,7 @@ mod settings;
 mod monitoring_quick;
 // Full monitoring module disabled until sysinfo 0.38 API migration
 // mod monitoring;
+mod evaluation;
 
 // use tauri::Manager; // Reserved for future app handle operations
 use serde::{Deserialize, Serialize};
@@ -170,6 +171,11 @@ pub fn run() {
             settings::cmd_set_setting,
             settings::cmd_test_ollama,
             settings::cmd_validate_openrouter_key,
+            // Evaluation chain commands (Agent-as-a-Judge)
+            evaluation::eval_agent_output,
+            evaluation::eval_quick,
+            evaluation::eval_history,
+            evaluation::eval_get_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running NEXUS");

@@ -1,0 +1,37 @@
+# Maintainer: TiKcoc <tikcoc@users.noreply.github.com>
+pkgname=nexus-workstation
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="NEXUS AI Workstation — Your complete AI stack. One desktop app."
+arch=('x86_64' 'aarch64')
+url="https://github.com/TiKcoc/nexus-workstation"
+license=('MIT')
+depends=('webkit2gtk-4.1' 'gtk3' 'libappindicator-gtk3' 'librsvg' 'patchelf')
+makedepends=('rust' 'cargo' 'nodejs' 'pnpm' 'git')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "$pkgname-$pkgver"
+    pnpm install --frozen-lockfile
+    pnpm tauri build --bundles none
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    install -Dm755 "src-tauri/target/release/nexus" "$pkgdir/usr/bin/nexus"
+    install -Dm644 "src-tauri/icons/icon.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/nexus.png"
+    install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+
+    # Desktop entry
+    install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/nexus.desktop" <<EOF
+[Desktop Entry]
+Name=NEXUS AI Workstation
+Comment=Your complete AI stack. One desktop app.
+Exec=nexus
+Icon=nexus
+Type=Application
+Categories=Development;IDE;ArtificialIntelligence;
+Keywords=AI;LLM;Docker;Agent;
+EOF
+}

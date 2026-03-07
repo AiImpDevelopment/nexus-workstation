@@ -13,7 +13,7 @@
 		Settings, LayoutDashboard, Brain, Newspaper,
 		Code2, Search, Cpu, HardDrive,
 		ChevronRight, Command as CommandIcon, Monitor,
-		PanelRightClose, PanelRightOpen, Bot, Activity, Network
+		PanelRightClose, PanelRightOpen, Bot, Activity, Network, Shield
 	} from '@lucide/svelte';
 	import { system } from '$lib/stores/system.svelte';
 
@@ -29,6 +29,7 @@
 		{ id: 'n8n', icon: Workflow, label: 'n8n & Services', href: '/n8n' },
 		{ id: 'ide', icon: Code2, label: 'CodeForge IDE', href: '/ide' },
 		{ id: 'agents', icon: Network, label: 'NeuralSwarm', href: '/agents' },
+		{ id: 'evaluation', icon: Shield, label: 'Evaluation', href: '/evaluation' },
 		{ id: 'ai', icon: Brain, label: 'AI Models', href: '/ai' },
 		{ id: 'news', icon: Newspaper, label: 'AI News', href: '/news' },
 	];
