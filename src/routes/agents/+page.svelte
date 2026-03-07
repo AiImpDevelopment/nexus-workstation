@@ -33,9 +33,25 @@
 		AlertTriangle,
 		Code2,
 		ArrowLeft,
-		BookOpen
+		BookOpen,
+		Play,
+		Square,
+		RotateCw,
+		ScrollText,
+		Clock,
+		Heart,
+		Timer,
+		TrendingUp,
+		CheckCircle,
+		XCircle,
+		Gauge,
+		Server
 	} from '@lucide/svelte';
 	import { system } from '$lib/stores/system.svelte';
+
+	// =====================================================================
+	// TYPES
+	// =====================================================================
 
 	type AgentRole = 'orchestrator' | 'coder' | 'debugger' | 'researcher' | 'writer' | 'reviewer' | 'architect' | string;
 
@@ -59,6 +75,40 @@
 		description: string;
 		capabilities: string[];
 	}
+
+	interface OrchestratorStatus {
+		running: boolean;
+		task_count: number;
+		tasks_ok: number;
+		tasks_fail: number;
+		uptime_seconds: number;
+		avg_trust: number;
+	}
+
+	interface TaskStatus {
+		name: string;
+		status: string;
+		duration_ms: number | null;
+		trust: number;
+		last_run: string | null;
+		pool: string;
+	}
+
+	interface ServiceHealth {
+		name: string;
+		status: string;
+		endpoint: string | null;
+	}
+
+	interface NeuralSwarmSnapshot {
+		status: OrchestratorStatus;
+		tasks: TaskStatus[];
+		services: ServiceHealth[];
+	}
+
+	// =====================================================================
+	// AGENT PRESETS
+	// =====================================================================
 
 	const ROLE_PRESETS: Record<string, { description: string; capabilities: string[]; icon: typeof Brain; defaultModel: string }> = {
 		orchestrator: {
@@ -107,7 +157,6 @@
 
 	const ROLE_LIST = Object.keys(ROLE_PRESETS) as AgentRole[];
 
-	// Built-in defaults
 	const builtInAgents: AgentView[] = [
 		{ id: 'orchestrator', name: 'Master Orchestrator', role: 'orchestrator', status: 'idle', model: 'hermes-3:8b', description: ROLE_PRESETS.orchestrator.description, capabilities: ROLE_PRESETS.orchestrator.capabilities },
 		{ id: 'coder', name: 'Code Agent', role: 'coder', status: 'idle', model: 'qwen2.5-coder:7b', description: ROLE_PRESETS.coder.description, capabilities: ROLE_PRESETS.coder.capabilities },
@@ -117,34 +166,131 @@
 		{ id: 'architect', name: 'Architect Agent', role: 'architect', status: 'idle', model: 'hermes-3:8b', description: ROLE_PRESETS.architect.description, capabilities: ROLE_PRESETS.architect.capabilities },
 	];
 
+	// =====================================================================
+	// STATE
+	// =====================================================================
+
+	// Tabs
+	let activeTab = $state<'orchestrator' | 'pool' | 'topology'>('orchestrator');
+
+	// Agent Pool state
 	let agents = $state<AgentView[]>([]);
 	let loading = $state(true);
-	let activeTab = $state<'pool' | 'topology'>('pool');
 	let errorMessage = $state<string | null>(null);
 
-	// Dialog state
+	// Agent dialogs
 	let showCreateDialog = $state(false);
 	let showEditDialog = $state(false);
 	let editingAgent = $state<AgentView | null>(null);
 	let confirmDelete = $state<string | null>(null);
-
-	// Form state
 	let formName = $state('');
 	let formRole = $state<AgentRole>('coder');
 	let formModel = $state('');
 	let formDescription = $state('');
 
+	// Orchestrator state
+	let snapshot = $state<NeuralSwarmSnapshot | null>(null);
+	let orchLoading = $state(true);
+	let orchError = $state<string | null>(null);
+	let showLogs = $state(false);
+	let logContent = $state('');
+	let orchActionLoading = $state<string | null>(null);
+	let orchPollInterval = $state<ReturnType<typeof setInterval> | null>(null);
+
+	// Derived
 	let activeCount = $derived(agents.filter((a) => a.status === 'active').length);
 	let idleCount = $derived(agents.filter((a) => a.status === 'idle').length);
 	let errorCount = $derived(agents.filter((a) => a.status === 'error').length);
 
-	let roleDistribution = $derived(() => {
-		const dist: Record<string, number> = {};
-		for (const a of agents) {
-			dist[a.role] = (dist[a.role] ?? 0) + 1;
-		}
-		return dist;
+	let orchIsActive = $derived(snapshot?.status.running ?? false);
+	let taskOkCount = $derived(snapshot?.status.tasks_ok ?? 0);
+	let taskFailCount = $derived(snapshot?.status.tasks_fail ?? 0);
+	let avgTrust = $derived(() => {
+		return snapshot?.status.avg_trust ?? 0;
 	});
+
+	// =====================================================================
+	// ORCHESTRATOR FUNCTIONS
+	// =====================================================================
+
+	async function fetchSnapshot() {
+		orchLoading = true;
+		orchError = null;
+		try {
+			snapshot = await invoke<NeuralSwarmSnapshot>('neuralswarm_snapshot');
+		} catch (e) {
+			orchError = `Failed to fetch orchestrator data: ${e}`;
+		}
+		orchLoading = false;
+	}
+
+	async function fetchLogs() {
+		try {
+			logContent = await invoke<string>('neuralswarm_logs', { lines: 200 });
+			showLogs = true;
+		} catch (e) {
+			orchError = `Failed to fetch logs: ${e}`;
+		}
+	}
+
+	async function orchAction(action: string) {
+		orchActionLoading = action;
+		orchError = null;
+		try {
+			await invoke<string>('neuralswarm_action', { action });
+			// Wait a moment for service state to change
+			await new Promise(r => setTimeout(r, 1500));
+			await fetchSnapshot();
+		} catch (e) {
+			orchError = `Action "${action}" failed: ${e}`;
+		}
+		orchActionLoading = null;
+	}
+
+	function startOrchPolling() {
+		fetchSnapshot();
+		orchPollInterval = setInterval(fetchSnapshot, 10000);
+	}
+
+	function stopOrchPolling() {
+		if (orchPollInterval) {
+			clearInterval(orchPollInterval);
+			orchPollInterval = null;
+		}
+	}
+
+	function formatUptime(seconds: number | null | undefined): string {
+		if (!seconds) return '--';
+		const h = Math.floor(seconds / 3600);
+		const m = Math.floor((seconds % 3600) / 60);
+		if (h > 0) return `${h}h ${m}m`;
+		return `${m}m`;
+	}
+
+	function trustColor(trust: number | null): string {
+		if (trust == null) return 'text-gx-text-muted';
+		if (trust >= 0.8) return 'text-green-400';
+		if (trust >= 0.5) return 'text-gx-neon';
+		if (trust >= 0.3) return 'text-yellow-400';
+		return 'text-red-400';
+	}
+
+	function taskStatusBadge(status: string): { cls: string; label: string } {
+		switch (status) {
+			case 'OK':
+				return { cls: 'border-green-500/50 text-green-400 bg-green-500/10', label: 'OK' };
+			case 'FAIL':
+				return { cls: 'border-red-500/50 text-red-400 bg-red-500/10', label: 'FAIL' };
+			case 'SKIP':
+				return { cls: 'border-yellow-500/50 text-yellow-400 bg-yellow-500/10', label: 'SKIP' };
+			default:
+				return { cls: 'border-gx-border-default text-gx-text-muted', label: status };
+		}
+	}
+
+	// =====================================================================
+	// AGENT POOL FUNCTIONS
+	// =====================================================================
 
 	function configToView(cfg: AgentConfig): AgentView {
 		const preset = ROLE_PRESETS[typeof cfg.role === 'string' ? cfg.role : ''];
@@ -163,11 +309,7 @@
 		loading = true;
 		try {
 			const serverAgents = await invoke<AgentConfig[]>('list_agents');
-			if (serverAgents.length > 0) {
-				agents = serverAgents.map(configToView);
-			} else {
-				agents = builtInAgents;
-			}
+			agents = serverAgents.length > 0 ? serverAgents.map(configToView) : builtInAgents;
 		} catch {
 			agents = builtInAgents;
 		}
@@ -216,8 +358,7 @@
 			});
 			showCreateDialog = false;
 			await loadAgents();
-		} catch (e) {
-			// If backend doesn't support it, add locally
+		} catch {
 			const preset = ROLE_PRESETS[formRole];
 			agents = [
 				...agents,
@@ -249,7 +390,6 @@
 			editingAgent = null;
 			await loadAgents();
 		} catch {
-			// Update locally
 			agents = agents.map((a) =>
 				a.id === editingAgent?.id
 					? {
@@ -276,31 +416,23 @@
 		errorMessage = null;
 		try {
 			await invoke('delete_agent', { id });
-		} catch {
-			// Remove locally if backend fails
-		}
+		} catch { /* Remove locally */ }
 		agents = agents.filter((a) => a.id !== id);
 	}
 
 	function statusColor(status: string): string {
 		switch (status) {
-			case 'active':
-				return 'text-gx-status-success';
-			case 'error':
-				return 'text-gx-status-error';
-			default:
-				return 'text-gx-text-muted';
+			case 'active': return 'text-gx-status-success';
+			case 'error': return 'text-gx-status-error';
+			default: return 'text-gx-text-muted';
 		}
 	}
 
 	function statusBadge(status: string): { cls: string; label: string } {
 		switch (status) {
-			case 'active':
-				return { cls: 'border-green-500/50 text-green-400 bg-green-500/10', label: 'Active' };
-			case 'error':
-				return { cls: 'border-red-500/50 text-red-400 bg-red-500/10', label: 'Error' };
-			default:
-				return { cls: 'border-gx-border-default text-gx-text-muted', label: 'Idle' };
+			case 'active': return { cls: 'border-green-500/50 text-green-400 bg-green-500/10', label: 'Active' };
+			case 'error': return { cls: 'border-red-500/50 text-red-400 bg-red-500/10', label: 'Error' };
+			default: return { cls: 'border-gx-border-default text-gx-text-muted', label: 'Idle' };
 		}
 	}
 
@@ -308,40 +440,61 @@
 		return ROLE_PRESETS[role]?.icon ?? Bot;
 	}
 
-	onMount(loadAgents);
+	// =====================================================================
+	// LIFECYCLE
+	// =====================================================================
+
+	onMount(() => {
+		loadAgents();
+		startOrchPolling();
+		return () => stopOrchPolling();
+	});
 </script>
 
 <main class="flex flex-col h-screen bg-gx-bg-primary">
 	<!-- Header -->
-	<header
-		class="h-14 border-b border-gx-border-default bg-gx-bg-secondary flex items-center px-4 gap-3 shrink-0"
-	>
+	<header class="h-14 border-b border-gx-border-default bg-gx-bg-secondary flex items-center px-4 gap-3 shrink-0">
 		<a href="/" class="text-gx-text-muted hover:text-gx-neon transition-colors">
 			<ArrowLeft size={18} />
 		</a>
 		<Network class="w-5 h-5 text-gx-neon" />
-		<h1 class="text-lg font-semibold text-gx-text-primary">NeuralSwarm Agents</h1>
+		<h1 class="text-lg font-semibold text-gx-text-primary">NeuralSwarm</h1>
 		<Badge variant="outline" class="text-[10px] px-1.5 py-0 border-gx-neon/30 text-gx-neon">
-			NeuralSwarm
+			{orchIsActive ? 'Active' : 'Offline'}
 		</Badge>
+		{#if snapshot?.status.task_count}
+			<Badge variant="outline" class="text-[10px] px-1.5 py-0 border-gx-border-default text-gx-text-muted">
+				{snapshot.status.task_count} tasks
+			</Badge>
+		{/if}
 		<div class="flex-1"></div>
-		<Button variant="outline" size="sm" onclick={openCreateDialog} class="text-xs h-7">
-			<Plus class="w-3.5 h-3.5" />
-			Create Agent
-		</Button>
+		{#if activeTab === 'pool'}
+			<Button variant="outline" size="sm" onclick={openCreateDialog} class="text-xs h-7">
+				<Plus class="w-3.5 h-3.5" />
+				Create Agent
+			</Button>
+		{/if}
 		<button
-			onclick={loadAgents}
+			onclick={() => { if (activeTab === 'orchestrator') fetchSnapshot(); else loadAgents(); }}
 			class="text-gx-text-muted hover:text-gx-neon transition-colors p-1.5 rounded-gx hover:bg-gx-bg-tertiary"
 			title="Refresh"
 		>
-			<RefreshCw size={16} class={loading ? 'animate-spin' : ''} />
+			<RefreshCw size={16} class={(orchLoading || loading) ? 'animate-spin' : ''} />
 		</button>
 	</header>
 
 	<!-- Tab Bar -->
-	<div
-		class="flex items-center gap-1 px-4 py-2 bg-gx-bg-secondary border-b border-gx-border-default shrink-0"
-	>
+	<div class="flex items-center gap-1 px-4 py-2 bg-gx-bg-secondary border-b border-gx-border-default shrink-0">
+		<button
+			onclick={() => (activeTab = 'orchestrator')}
+			class="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-gx transition-all
+				{activeTab === 'orchestrator'
+				? 'bg-gx-neon/10 text-gx-neon border border-gx-neon/30'
+				: 'text-gx-text-muted hover:text-gx-text-secondary hover:bg-gx-bg-hover'}"
+		>
+			<Activity size={13} />
+			Orchestrator
+		</button>
 		<button
 			onclick={() => (activeTab = 'pool')}
 			class="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-gx transition-all
@@ -365,38 +518,48 @@
 
 		<div class="flex-1"></div>
 
-		<!-- Stats Summary -->
-		<div class="flex items-center gap-3 text-xs text-gx-text-muted">
-			<span class="flex items-center gap-1">
-				<Bot size={12} />
-				{agents.length} total
-			</span>
-			<span class="flex items-center gap-1">
-				<Circle size={8} class="text-green-400 fill-green-400" />
-				{activeCount} active
-			</span>
-			<span class="flex items-center gap-1">
-				<Circle size={8} class="text-gx-text-muted fill-gx-text-muted" />
-				{idleCount} idle
-			</span>
-			{#if errorCount > 0}
+		{#if activeTab === 'orchestrator'}
+			<div class="flex items-center gap-3 text-xs text-gx-text-muted">
 				<span class="flex items-center gap-1">
-					<Circle size={8} class="text-red-400 fill-red-400" />
-					{errorCount} error
+					<CheckCircle size={12} class="text-green-400" />
+					{taskOkCount} OK
 				</span>
-			{/if}
-		</div>
+				{#if taskFailCount > 0}
+					<span class="flex items-center gap-1">
+						<XCircle size={12} class="text-red-400" />
+						{taskFailCount} FAIL
+					</span>
+				{/if}
+				<span class="flex items-center gap-1">
+					<TrendingUp size={12} class="text-gx-neon" />
+					Trust {(avgTrust() * 100).toFixed(0)}%
+				</span>
+			</div>
+		{:else}
+			<div class="flex items-center gap-3 text-xs text-gx-text-muted">
+				<span class="flex items-center gap-1">
+					<Bot size={12} />
+					{agents.length} total
+				</span>
+				<span class="flex items-center gap-1">
+					<Circle size={8} class="text-green-400 fill-green-400" />
+					{activeCount} active
+				</span>
+				<span class="flex items-center gap-1">
+					<Circle size={8} class="text-gx-text-muted fill-gx-text-muted" />
+					{idleCount} idle
+				</span>
+			</div>
+		{/if}
 	</div>
 
 	<!-- Error Banner -->
-	{#if errorMessage}
-		<div
-			class="mx-4 mt-2 flex items-center gap-3 p-3 rounded-gx bg-red-500/10 border border-red-500/30 text-red-400 text-sm"
-		>
+	{#if errorMessage || orchError}
+		<div class="mx-4 mt-2 flex items-center gap-3 p-3 rounded-gx bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
 			<AlertTriangle class="w-4 h-4 shrink-0" />
-			<span class="flex-1">{errorMessage}</span>
+			<span class="flex-1">{errorMessage || orchError}</span>
 			<button
-				onclick={() => (errorMessage = null)}
+				onclick={() => { errorMessage = null; orchError = null; }}
 				class="p-1 hover:bg-red-500/20 rounded transition-colors"
 			>
 				<X class="w-3 h-3" />
@@ -406,183 +569,364 @@
 
 	<!-- Content -->
 	<div class="flex-1 overflow-y-auto p-4">
-		{#if loading}
-			<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-				{#each Array(6) as _}
-					<div class="h-40 rounded-gx-lg bg-gx-bg-tertiary animate-pulse"></div>
-				{/each}
-			</div>
-		{:else if activeTab === 'pool'}
-			<!-- Agent Pool Grid -->
-			<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-				{#each agents as agent (agent.id)}
-					{@const RoleIcon = getRoleIcon(agent.role)}
-					<Card
-						class="bg-gx-bg-secondary border-gx-border-default hover:border-gx-neon/30 transition-colors"
-					>
+		{#if activeTab === 'orchestrator'}
+			<!-- ============================================================= -->
+			<!-- ORCHESTRATOR DASHBOARD -->
+			<!-- ============================================================= -->
+			{#if orchLoading && !snapshot}
+				<div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+					{#each Array(4) as _}
+						<div class="h-24 rounded-gx-lg bg-gx-bg-tertiary animate-pulse"></div>
+					{/each}
+				</div>
+				<div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-3 mt-3">
+					{#each Array(12) as _}
+						<div class="h-20 rounded-gx bg-gx-bg-tertiary animate-pulse"></div>
+					{/each}
+				</div>
+			{:else if snapshot}
+				<!-- Status Cards -->
+				<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+					<!-- Orchestrator Status -->
+					<Card class="bg-gx-bg-secondary border-gx-border-default">
 						<CardHeader class="pb-2">
-							<div class="flex items-start justify-between">
-								<div class="flex items-center gap-2.5">
-									<div
-										class="w-9 h-9 rounded-gx bg-gx-bg-elevated flex items-center justify-center border border-gx-border-default shrink-0"
-									>
-										<RoleIcon size={16} class={statusColor(agent.status)} />
-									</div>
-									<div class="min-w-0">
-										<CardTitle class="text-sm truncate">{agent.name}</CardTitle>
-										<div class="flex items-center gap-1.5 mt-0.5">
-											<Badge
-												variant="outline"
-												class="text-[9px] px-1 py-0 h-3.5 {statusBadge(agent.status).cls}"
-											>
-												{statusBadge(agent.status).label}
-											</Badge>
-											<Badge
-												variant="outline"
-												class="text-[9px] px-1 py-0 h-3.5 border-gx-border-default text-gx-text-muted"
-											>
-												{agent.role}
-											</Badge>
-										</div>
-									</div>
-								</div>
-								<div class="flex items-center gap-0.5 shrink-0">
-									<button
-										class="p-1.5 text-gx-text-muted hover:text-gx-neon transition-colors rounded-gx hover:bg-gx-bg-hover"
-										title="Edit agent"
-										onclick={() => openEditDialog(agent)}
-									>
-										<Edit size={13} />
-									</button>
-									{#if confirmDelete === agent.id}
-										<button
-											class="px-2 py-1 rounded text-[10px] font-medium bg-red-500/20 text-red-400 border border-red-500/40 hover:bg-red-500/30 transition-colors"
-											onclick={() => deleteAgent(agent.id)}
-										>
-											Confirm
-										</button>
-										<button
-											class="p-1 rounded hover:bg-gx-bg-tertiary text-gx-text-muted transition-colors"
-											onclick={() => (confirmDelete = null)}
-										>
-											<X size={12} />
-										</button>
-									{:else}
-										<button
-											class="p-1.5 text-gx-text-muted hover:text-red-400 transition-colors rounded-gx hover:bg-red-500/10"
-											title="Delete agent"
-											onclick={() => deleteAgent(agent.id)}
-										>
-											<Trash2 size={13} />
-										</button>
-									{/if}
-								</div>
-							</div>
+							<CardTitle class="text-xs text-gx-text-muted flex items-center gap-1.5">
+								<Server size={14} />
+								Orchestrator
+							</CardTitle>
 						</CardHeader>
 						<CardContent>
-							<p class="text-xs text-gx-text-muted mb-2.5 line-clamp-2">
-								{agent.description}
-							</p>
-							<div class="flex items-center gap-1.5 mb-2.5 text-xs text-gx-text-muted">
-								<Zap size={11} class="text-gx-neon" />
-								<span class="font-mono text-[11px] text-gx-text-secondary truncate">{agent.model}</span>
+							<div class="flex items-center gap-2">
+								<span class="w-2.5 h-2.5 rounded-full {orchIsActive ? 'bg-green-400 animate-pulse' : 'bg-gx-text-muted'}"></span>
+								<span class="text-lg font-bold {orchIsActive ? 'text-green-400' : 'text-gx-text-muted'}">
+									{orchIsActive ? 'Running' : 'Stopped'}
+								</span>
 							</div>
-							<div class="flex flex-wrap gap-1">
-								{#each agent.capabilities as cap}
-									<span
-										class="text-[10px] px-1.5 py-0.5 rounded bg-gx-bg-tertiary text-gx-text-muted border border-gx-border-default"
-									>
-										{cap}
-									</span>
-								{/each}
+							<p class="text-xs text-gx-text-muted mt-1.5">Standalone AI engine</p>
+						</CardContent>
+					</Card>
+
+					<!-- Uptime -->
+					<Card class="bg-gx-bg-secondary border-gx-border-default">
+						<CardHeader class="pb-2">
+							<CardTitle class="text-xs text-gx-text-muted flex items-center gap-1.5">
+								<Clock size={14} />
+								Uptime
+							</CardTitle>
+						</CardHeader>
+						<CardContent>
+							<p class="text-lg font-bold text-gx-text-primary">
+								{formatUptime(snapshot.status.uptime_seconds)}
+							</p>
+						</CardContent>
+					</Card>
+
+					<!-- Tasks Summary -->
+					<Card class="bg-gx-bg-secondary border-gx-border-default">
+						<CardHeader class="pb-2">
+							<CardTitle class="text-xs text-gx-text-muted flex items-center gap-1.5">
+								<Gauge size={14} />
+								Tasks
+							</CardTitle>
+						</CardHeader>
+						<CardContent>
+							<p class="text-lg font-bold text-gx-text-primary">
+								{snapshot.status.task_count} <span class="text-sm font-normal text-gx-text-muted">registered</span>
+							</p>
+							<div class="flex items-center gap-3 mt-1.5 text-xs">
+								<span class="text-green-400">{taskOkCount} OK</span>
+								{#if taskFailCount > 0}
+									<span class="text-red-400">{taskFailCount} FAIL</span>
+								{/if}
 							</div>
 						</CardContent>
 					</Card>
-				{/each}
-			</div>
+
+					<!-- Trust Score -->
+					<Card class="bg-gx-bg-secondary border-gx-border-default">
+						<CardHeader class="pb-2">
+							<CardTitle class="text-xs text-gx-text-muted flex items-center gap-1.5">
+								<TrendingUp size={14} />
+								Avg Trust
+							</CardTitle>
+						</CardHeader>
+						<CardContent>
+							<p class="text-lg font-bold {trustColor(avgTrust())}">
+								{(avgTrust() * 100).toFixed(1)}%
+							</p>
+							<div class="w-full h-1.5 bg-gx-bg-tertiary rounded-full mt-2 overflow-hidden">
+								<div
+									class="h-full rounded-full transition-all duration-500 {avgTrust() >= 0.5 ? 'bg-gx-neon' : 'bg-yellow-400'}"
+									style="width: {avgTrust() * 100}%"
+								></div>
+							</div>
+						</CardContent>
+					</Card>
+				</div>
+
+				<!-- Controls -->
+				<div class="flex items-center gap-2 mb-4">
+					{#if orchIsActive}
+						<Button
+							variant="outline"
+							size="sm"
+							class="text-xs h-7"
+							onclick={() => orchAction('restart')}
+							disabled={orchActionLoading != null}
+						>
+							{#if orchActionLoading === 'restart'}
+								<RefreshCw size={13} class="animate-spin" />
+							{:else}
+								<RotateCw size={13} />
+							{/if}
+							Restart
+						</Button>
+						<Button
+							variant="outline"
+							size="sm"
+							class="text-xs h-7 text-red-400 hover:text-red-300 border-red-500/30 hover:border-red-500/50"
+							onclick={() => orchAction('stop')}
+							disabled={orchActionLoading != null}
+						>
+							{#if orchActionLoading === 'stop'}
+								<RefreshCw size={13} class="animate-spin" />
+							{:else}
+								<Square size={13} />
+							{/if}
+							Stop
+						</Button>
+					{:else}
+						<Button
+							variant="outline"
+							size="sm"
+							class="text-xs h-7 text-green-400 hover:text-green-300 border-green-500/30 hover:border-green-500/50"
+							onclick={() => orchAction('start')}
+							disabled={orchActionLoading != null}
+						>
+							{#if orchActionLoading === 'start'}
+								<RefreshCw size={13} class="animate-spin" />
+							{:else}
+								<Play size={13} />
+							{/if}
+							Start
+						</Button>
+					{/if}
+
+					<Button
+						variant="outline"
+						size="sm"
+						class="text-xs h-7"
+						onclick={fetchLogs}
+					>
+						<ScrollText size={13} />
+						Journal
+					</Button>
+
+					<div class="flex-1"></div>
+
+					{#if orchLoading}
+						<Badge variant="outline" class="text-[10px] px-1.5 py-0 border-gx-neon/30 text-gx-neon animate-pulse">
+							Polling...
+						</Badge>
+					{/if}
+				</div>
+
+				<!-- Local Services -->
+				{#if snapshot.services.length > 0}
+					<div class="mb-4">
+						<h3 class="text-xs font-medium text-gx-text-muted mb-2 flex items-center gap-1.5">
+							<Heart size={12} />
+							Local Services
+						</h3>
+						<div class="flex flex-wrap gap-2">
+							{#each snapshot.services as svc}
+								<div class="flex items-center gap-1.5 px-2.5 py-1 rounded-gx border border-gx-border-default bg-gx-bg-secondary text-xs">
+									<span class="w-1.5 h-1.5 rounded-full {svc.status === 'active' ? 'bg-green-400' : 'bg-red-400'}"></span>
+									<span class="text-gx-text-secondary">{svc.name}</span>
+									{#if svc.endpoint}
+										<span class="text-gx-text-muted/50 font-mono text-[9px]">{svc.endpoint}</span>
+									{/if}
+								</div>
+							{/each}
+						</div>
+					</div>
+				{/if}
+
+				<!-- Task Grid -->
+				<h3 class="text-xs font-medium text-gx-text-muted mb-2 flex items-center gap-1.5">
+					<Activity size={12} />
+					Task Workers
+				</h3>
+				<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
+					{#each snapshot.tasks as task (task.name)}
+						{@const badge = taskStatusBadge(task.status)}
+						<div class="flex items-center gap-2 p-2.5 rounded-gx border border-gx-border-default bg-gx-bg-secondary hover:border-gx-neon/20 transition-colors">
+							<!-- Status dot -->
+							<span class="w-2 h-2 rounded-full shrink-0 {task.status === 'OK' ? 'bg-green-400' : task.status === 'FAIL' ? 'bg-red-400' : 'bg-yellow-400'}"></span>
+
+							<!-- Task info -->
+							<div class="flex-1 min-w-0">
+								<div class="flex items-center gap-1.5">
+									<span class="text-xs font-medium text-gx-text-primary truncate">
+										{task.name.replace(/_/g, ' ')}
+									</span>
+									<Badge variant="outline" class="text-[8px] px-1 py-0 h-3 shrink-0 {badge.cls}">
+										{badge.label}
+									</Badge>
+								</div>
+								<div class="flex items-center gap-2 mt-0.5 text-[10px] text-gx-text-muted">
+									{#if task.duration_ms != null}
+										<span class="flex items-center gap-0.5">
+											<Timer size={8} />
+											{(task.duration_ms / 1000).toFixed(1)}s
+										</span>
+									{/if}
+									{#if task.trust > 0}
+										<span class="flex items-center gap-0.5 {trustColor(task.trust)}">
+											<TrendingUp size={8} />
+											{(task.trust * 100).toFixed(0)}%
+										</span>
+									{/if}
+									<span class="text-gx-text-muted/50">{task.pool}</span>
+								</div>
+							</div>
+						</div>
+					{/each}
+				</div>
+
+				{#if !orchIsActive && snapshot.tasks.length === 0}
+					<div class="mt-4 p-4 rounded-gx border border-gx-border-default bg-gx-bg-secondary text-center">
+						<Brain size={32} class="mx-auto text-gx-text-muted mb-2" />
+						<p class="text-sm text-gx-text-secondary mb-1">No tasks configured yet</p>
+						<p class="text-xs text-gx-text-muted">Use the Setup Wizard to configure your local AI stack and orchestrator tasks.</p>
+					</div>
+				{/if}
+			{:else}
+				<div class="flex flex-col items-center justify-center h-96 gap-4">
+					<Brain class="w-16 h-16 text-gx-text-muted" />
+					<h2 class="text-xl font-semibold text-gx-text-primary">NEXUS AI Orchestrator</h2>
+					<p class="text-gx-text-muted text-center max-w-md">
+						Configure your local AI stack to get started. NEXUS will set up Ollama, download models, and start the orchestrator automatically.
+					</p>
+					<Button variant="outline" onclick={() => orchAction('start')}>
+						<Play size={14} /> Setup Wizard
+					</Button>
+				</div>
+			{/if}
+
+		{:else if activeTab === 'pool'}
+			<!-- ============================================================= -->
+			<!-- AGENT POOL (existing) -->
+			<!-- ============================================================= -->
+			{#if loading}
+				<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+					{#each Array(6) as _}
+						<div class="h-40 rounded-gx-lg bg-gx-bg-tertiary animate-pulse"></div>
+					{/each}
+				</div>
+			{:else}
+				<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+					{#each agents as agent (agent.id)}
+						{@const RoleIcon = getRoleIcon(agent.role)}
+						<Card class="bg-gx-bg-secondary border-gx-border-default hover:border-gx-neon/30 transition-colors">
+							<CardHeader class="pb-2">
+								<div class="flex items-start justify-between">
+									<div class="flex items-center gap-2.5">
+										<div class="w-9 h-9 rounded-gx bg-gx-bg-elevated flex items-center justify-center border border-gx-border-default shrink-0">
+											<RoleIcon size={16} class={statusColor(agent.status)} />
+										</div>
+										<div class="min-w-0">
+											<CardTitle class="text-sm truncate">{agent.name}</CardTitle>
+											<div class="flex items-center gap-1.5 mt-0.5">
+												<Badge variant="outline" class="text-[9px] px-1 py-0 h-3.5 {statusBadge(agent.status).cls}">
+													{statusBadge(agent.status).label}
+												</Badge>
+												<Badge variant="outline" class="text-[9px] px-1 py-0 h-3.5 border-gx-border-default text-gx-text-muted">
+													{agent.role}
+												</Badge>
+											</div>
+										</div>
+									</div>
+									<div class="flex items-center gap-0.5 shrink-0">
+										<button
+											class="p-1.5 text-gx-text-muted hover:text-gx-neon transition-colors rounded-gx hover:bg-gx-bg-hover"
+											title="Edit agent"
+											onclick={() => openEditDialog(agent)}
+										>
+											<Edit size={13} />
+										</button>
+										{#if confirmDelete === agent.id}
+											<button
+												class="px-2 py-1 rounded text-[10px] font-medium bg-red-500/20 text-red-400 border border-red-500/40 hover:bg-red-500/30 transition-colors"
+												onclick={() => deleteAgent(agent.id)}
+											>
+												Confirm
+											</button>
+											<button
+												class="p-1 rounded hover:bg-gx-bg-tertiary text-gx-text-muted transition-colors"
+												onclick={() => (confirmDelete = null)}
+											>
+												<X size={12} />
+											</button>
+										{:else}
+											<button
+												class="p-1.5 text-gx-text-muted hover:text-red-400 transition-colors rounded-gx hover:bg-red-500/10"
+												title="Delete agent"
+												onclick={() => deleteAgent(agent.id)}
+											>
+												<Trash2 size={13} />
+											</button>
+										{/if}
+									</div>
+								</div>
+							</CardHeader>
+							<CardContent>
+								<p class="text-xs text-gx-text-muted mb-2.5 line-clamp-2">{agent.description}</p>
+								<div class="flex items-center gap-1.5 mb-2.5 text-xs text-gx-text-muted">
+									<Zap size={11} class="text-gx-neon" />
+									<span class="font-mono text-[11px] text-gx-text-secondary truncate">{agent.model}</span>
+								</div>
+								<div class="flex flex-wrap gap-1">
+									{#each agent.capabilities as cap}
+										<span class="text-[10px] px-1.5 py-0.5 rounded bg-gx-bg-tertiary text-gx-text-muted border border-gx-border-default">
+											{cap}
+										</span>
+									{/each}
+								</div>
+							</CardContent>
+						</Card>
+					{/each}
+				</div>
+			{/if}
+
 		{:else if activeTab === 'topology'}
-			<!-- Topology Visualization -->
+			<!-- ============================================================= -->
+			<!-- TOPOLOGY (existing) -->
+			<!-- ============================================================= -->
 			<div class="flex flex-col items-center justify-center h-full gap-4">
-				<svg
-					width="500"
-					height="500"
-					viewBox="-250 -250 500 500"
-					class="max-w-full max-h-full"
-				>
-					<!-- Connection lines from center to each agent -->
+				<svg width="500" height="500" viewBox="-250 -250 500 500" class="max-w-full max-h-full">
 					{#each agents.filter((a) => a.role !== 'orchestrator') as agent, i}
 						{@const count = agents.filter((a) => a.role !== 'orchestrator').length}
 						{@const angle = (i / count) * 2 * Math.PI - Math.PI / 2}
 						{@const x = Math.cos(angle) * 160}
 						{@const y = Math.sin(angle) * 160}
-						<line
-							x1="0"
-							y1="0"
-							x2={x}
-							y2={y}
+						<line x1="0" y1="0" x2={x} y2={y}
 							stroke="var(--color-gx-border-default, #2a2a35)"
-							stroke-width="1.5"
-							stroke-dasharray="6 4"
-							opacity="0.6"
-						/>
-						<!-- Animated dot on the line -->
+							stroke-width="1.5" stroke-dasharray="6 4" opacity="0.6" />
 						<circle r="2" fill="var(--color-gx-neon, #00FF66)" opacity="0.5">
-							<animateMotion
-								dur="{3 + i * 0.5}s"
-								repeatCount="indefinite"
-								path="M0,0 L{x},{y}"
-							/>
+							<animateMotion dur="{3 + i * 0.5}s" repeatCount="indefinite" path="M0,0 L{x},{y}" />
 						</circle>
 					{/each}
 
-					<!-- Central orchestrator node -->
-					<circle
-						cx="0"
-						cy="0"
-						r="45"
-						fill="none"
-						stroke="var(--color-gx-neon, #00FF66)"
-						stroke-width="2"
-						opacity="0.8"
-					/>
-					<circle
-						cx="0"
-						cy="0"
-						r="45"
-						fill="var(--color-gx-neon, #00FF66)"
-						opacity="0.08"
-					/>
-					<!-- Glow ring -->
-					<circle
-						cx="0"
-						cy="0"
-						r="50"
-						fill="none"
-						stroke="var(--color-gx-neon, #00FF66)"
-						stroke-width="1"
-						opacity="0.2"
-					/>
+					<circle cx="0" cy="0" r="45" fill="none" stroke="var(--color-gx-neon, #00FF66)" stroke-width="2" opacity="0.8" />
+					<circle cx="0" cy="0" r="45" fill="var(--color-gx-neon, #00FF66)" opacity="0.08" />
+					<circle cx="0" cy="0" r="50" fill="none" stroke="var(--color-gx-neon, #00FF66)" stroke-width="1" opacity="0.2" />
 
-					<!-- Orchestrator label -->
-					<text
-						x="0"
-						y="-8"
-						text-anchor="middle"
-						fill="var(--color-gx-neon, #00FF66)"
-						font-size="12"
-						font-weight="600">Orchestrator</text
-					>
-					<text
-						x="0"
-						y="8"
-						text-anchor="middle"
-						fill="var(--color-gx-text-muted, #666)"
-						font-size="9"
-					>
+					<text x="0" y="-8" text-anchor="middle" fill="var(--color-gx-neon, #00FF66)" font-size="12" font-weight="600">Orchestrator</text>
+					<text x="0" y="8" text-anchor="middle" fill="var(--color-gx-text-muted, #666)" font-size="9">
 						{agents.find((a) => a.role === 'orchestrator')?.model ?? 'hermes-3:8b'}
 					</text>
 
-					<!-- Agent nodes -->
 					{#each agents.filter((a) => a.role !== 'orchestrator') as agent, i}
 						{@const count = agents.filter((a) => a.role !== 'orchestrator').length}
 						{@const angle = (i / count) * 2 * Math.PI - Math.PI / 2}
@@ -595,49 +939,46 @@
 									? 'var(--color-gx-status-error, #ef4444)'
 									: 'var(--color-gx-border-default, #2a2a35)'}
 
-						<circle
-							cx={x}
-							cy={y}
-							r="30"
-							fill="var(--color-gx-bg-elevated, #1a1a22)"
-							stroke={nodeColor}
-							stroke-width="1.5"
-						/>
-						<text
-							x={x}
-							y={y - 5}
-							text-anchor="middle"
-							fill="var(--color-gx-text-primary, #e0e0e0)"
-							font-size="9"
-							font-weight="500"
-						>
+						<circle cx={x} cy={y} r="30" fill="var(--color-gx-bg-elevated, #1a1a22)" stroke={nodeColor} stroke-width="1.5" />
+						<text x={x} y={y - 5} text-anchor="middle" fill="var(--color-gx-text-primary, #e0e0e0)" font-size="9" font-weight="500">
 							{agent.name.split(' ')[0]}
 						</text>
-						<text
-							x={x}
-							y={y + 7}
-							text-anchor="middle"
-							fill="var(--color-gx-text-muted, #666)"
-							font-size="7"
-						>
+						<text x={x} y={y + 7} text-anchor="middle" fill="var(--color-gx-text-muted, #666)" font-size="7">
 							{agent.role}
 						</text>
-						<!-- Status indicator dot -->
-						<circle
-							cx={x + 22}
-							cy={y - 22}
-							r="4"
-							fill={nodeColor}
-						/>
+						<circle cx={x + 22} cy={y - 22} r="4" fill={nodeColor} />
 					{/each}
 				</svg>
-
 				<p class="text-sm text-gx-text-muted">
 					Agent topology: {agents.length} agents connected to the central Orchestrator
 				</p>
 			</div>
 		{/if}
 	</div>
+
+	<!-- Journal Log Panel -->
+	{#if showLogs}
+		<div class="shrink-0 h-72 border-t border-gx-border-default bg-gx-bg-secondary flex flex-col">
+			<div class="flex items-center justify-between px-4 py-2 border-b border-gx-border-default">
+				<span class="text-sm text-gx-text-primary font-medium flex items-center gap-2">
+					<ScrollText size={14} class="text-gx-neon" />
+					Journal: <span class="font-mono text-gx-neon">neuralswarm-orchestrator</span>
+				</span>
+				<div class="flex items-center gap-2">
+					<Button variant="outline" size="sm" class="text-xs h-6" onclick={fetchLogs}>
+						<RefreshCw size={12} />
+					</Button>
+					<button
+						class="p-1 rounded hover:bg-gx-bg-tertiary text-gx-text-muted hover:text-gx-text-primary transition-colors"
+						onclick={() => showLogs = false}
+					>
+						<X size={14} />
+					</button>
+				</div>
+			</div>
+			<pre class="flex-1 overflow-auto p-3 text-xs font-mono text-gx-text-secondary whitespace-pre-wrap leading-relaxed">{logContent || 'No logs available.'}</pre>
+		</div>
+	{/if}
 </main>
 
 <!-- Create Agent Dialog -->
@@ -652,12 +993,8 @@
 		<div class="space-y-4 py-2">
 			<div class="space-y-1.5">
 				<label class="text-xs text-gx-text-secondary font-medium" for="agent-name">Name</label>
-				<Input
-					id="agent-name"
-					bind:value={formName}
-					placeholder="e.g. Security Auditor"
-					class="bg-gx-bg-tertiary border-gx-border-default text-gx-text-primary placeholder:text-gx-text-muted"
-				/>
+				<Input id="agent-name" bind:value={formName} placeholder="e.g. Security Auditor"
+					class="bg-gx-bg-tertiary border-gx-border-default text-gx-text-primary placeholder:text-gx-text-muted" />
 			</div>
 			<div class="space-y-1.5">
 				<label class="text-xs text-gx-text-secondary font-medium" for="agent-role">Role</label>
@@ -679,20 +1016,12 @@
 			</div>
 			<div class="space-y-1.5">
 				<label class="text-xs text-gx-text-secondary font-medium" for="agent-model">Model</label>
-				<Input
-					id="agent-model"
-					bind:value={formModel}
-					placeholder="e.g. hermes-3:8b"
-					class="bg-gx-bg-tertiary border-gx-border-default text-gx-text-primary placeholder:text-gx-text-muted font-mono text-sm"
-				/>
+				<Input id="agent-model" bind:value={formModel} placeholder="e.g. hermes-3:8b"
+					class="bg-gx-bg-tertiary border-gx-border-default text-gx-text-primary placeholder:text-gx-text-muted font-mono text-sm" />
 			</div>
 			<div class="space-y-1.5">
 				<label class="text-xs text-gx-text-secondary font-medium" for="agent-desc">Description</label>
-				<textarea
-					id="agent-desc"
-					bind:value={formDescription}
-					placeholder="Describe the agent's purpose..."
-					rows="3"
+				<textarea id="agent-desc" bind:value={formDescription} placeholder="Describe the agent's purpose..." rows="3"
 					class="w-full rounded-gx border border-gx-border-default bg-gx-bg-tertiary text-gx-text-primary text-sm p-2 placeholder:text-gx-text-muted resize-none focus:outline-none focus:border-gx-neon/50"
 				></textarea>
 			</div>
@@ -719,11 +1048,8 @@
 		<div class="space-y-4 py-2">
 			<div class="space-y-1.5">
 				<label class="text-xs text-gx-text-secondary font-medium" for="edit-name">Name</label>
-				<Input
-					id="edit-name"
-					bind:value={formName}
-					class="bg-gx-bg-tertiary border-gx-border-default text-gx-text-primary"
-				/>
+				<Input id="edit-name" bind:value={formName}
+					class="bg-gx-bg-tertiary border-gx-border-default text-gx-text-primary" />
 			</div>
 			<div class="space-y-1.5">
 				<label class="text-xs text-gx-text-secondary font-medium" for="edit-role">Role</label>
@@ -745,18 +1071,12 @@
 			</div>
 			<div class="space-y-1.5">
 				<label class="text-xs text-gx-text-secondary font-medium" for="edit-model">Model</label>
-				<Input
-					id="edit-model"
-					bind:value={formModel}
-					class="bg-gx-bg-tertiary border-gx-border-default text-gx-text-primary font-mono text-sm"
-				/>
+				<Input id="edit-model" bind:value={formModel}
+					class="bg-gx-bg-tertiary border-gx-border-default text-gx-text-primary font-mono text-sm" />
 			</div>
 			<div class="space-y-1.5">
 				<label class="text-xs text-gx-text-secondary font-medium" for="edit-desc">Description</label>
-				<textarea
-					id="edit-desc"
-					bind:value={formDescription}
-					rows="3"
+				<textarea id="edit-desc" bind:value={formDescription} rows="3"
 					class="w-full rounded-gx border border-gx-border-default bg-gx-bg-tertiary text-gx-text-primary text-sm p-2 placeholder:text-gx-text-muted resize-none focus:outline-none focus:border-gx-neon/50"
 				></textarea>
 			</div>

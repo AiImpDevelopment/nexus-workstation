@@ -22,6 +22,7 @@ export interface ServiceStatus {
 	ollama: ServiceState;
 	docker: ServiceState;
 	n8n: ServiceState;
+	neuralswarm: ServiceState;
 }
 
 class SystemStore {
@@ -30,6 +31,7 @@ class SystemStore {
 		ollama: 'checking',
 		docker: 'checking',
 		n8n: 'checking',
+		neuralswarm: 'checking',
 	});
 
 	private statsInterval: ReturnType<typeof setInterval> | null = null;
@@ -57,6 +59,17 @@ class SystemStore {
 			} catch {
 				this.services = { ...this.services, [key]: 'offline' };
 			}
+		}
+
+		// NeuralSwarm — Nexus's own standalone orchestrator
+		try {
+			const status = await invoke<{ running: boolean }>('neuralswarm_status');
+			this.services = {
+				...this.services,
+				neuralswarm: status.running ? 'online' : 'offline',
+			};
+		} catch {
+			this.services = { ...this.services, neuralswarm: 'offline' };
 		}
 	}
 

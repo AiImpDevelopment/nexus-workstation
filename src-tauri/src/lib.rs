@@ -16,6 +16,11 @@ mod monitoring_quick;
 mod evaluation;
 mod chat;
 mod browser;
+mod system_agent;
+
+// Standalone Orchestrator — Nexus's own AI brain (no external dependencies)
+mod orchestrator;
+mod neuralswarm;
 
 // use tauri::Manager; // Reserved for future app handle operations
 use serde::{Deserialize, Serialize};
@@ -183,6 +188,15 @@ pub fn run() {
             // Internal browser commands
             browser::open_internal_browser,
             browser::close_internal_browser,
+            // System Agent commands (offline-first health checks)
+            system_agent::system_scan,
+            system_agent::system_health_quick,
+            // NeuralSwarm Orchestrator commands
+            neuralswarm::neuralswarm_status,
+            neuralswarm::neuralswarm_tasks,
+            neuralswarm::neuralswarm_logs,
+            neuralswarm::neuralswarm_action,
+            neuralswarm::neuralswarm_snapshot,
         ])
         .run(tauri::generate_context!())
         .expect("error while running NEXUS");

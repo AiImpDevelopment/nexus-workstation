@@ -285,6 +285,10 @@
 				<span class={system.services.n8n === 'online' ? 'text-gx-status-success' : system.services.n8n === 'checking' ? 'text-gx-status-warning' : 'text-gx-status-error'}>●</span>
 				<span>n8n</span>
 			</div>
+			<div class="flex items-center gap-1">
+				<span class={system.services.neuralswarm === 'online' ? 'text-gx-status-success' : system.services.neuralswarm === 'checking' ? 'text-gx-status-warning' : 'text-gx-status-error'}>●</span>
+				<span>Swarm</span>
+			</div>
 
 			<div class="flex-1"></div>
 
