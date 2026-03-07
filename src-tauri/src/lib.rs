@@ -14,6 +14,8 @@ mod monitoring_quick;
 // Full monitoring module disabled until sysinfo 0.38 API migration
 // mod monitoring;
 mod evaluation;
+mod chat;
+mod browser;
 
 // use tauri::Manager; // Reserved for future app handle operations
 use serde::{Deserialize, Serialize};
@@ -176,6 +178,11 @@ pub fn run() {
             evaluation::eval_quick,
             evaluation::eval_history,
             evaluation::eval_get_config,
+            // Chat streaming (Tauri Channel-based)
+            chat::chat_stream,
+            // Internal browser commands
+            browser::open_internal_browser,
+            browser::close_internal_browser,
         ])
         .run(tauri::generate_context!())
         .expect("error while running NEXUS");
