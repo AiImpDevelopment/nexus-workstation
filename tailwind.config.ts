@@ -29,6 +29,7 @@ export default {
 						'red': '#FF3366',
 						'orange': '#FF6600',
 						'purple': '#9933FF',
+						'blue': '#3366FF',
 					},
 
 					// Text colors
@@ -42,6 +43,7 @@ export default {
 					// Border colors
 					'border': {
 						'default': '#2A2A2A',
+						'hover': '#3A3A4A',
 						'focus': '#00FF66',
 						'subtle': '#1F1F1F',
 					},
@@ -65,6 +67,7 @@ export default {
 				'gx-glow': '0 0 20px rgba(0, 255, 102, 0.3)',
 				'gx-glow-lg': '0 0 40px rgba(0, 255, 102, 0.4)',
 				'gx-glow-sm': '0 0 10px rgba(0, 255, 102, 0.2)',
+				'gx-glow-md': '0 0 16px rgba(0, 255, 102, 0.3)',
 			},
 
 			animation: {

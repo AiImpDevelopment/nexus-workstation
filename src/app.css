@@ -20,6 +20,7 @@
 	--color-gx-accent-red: #FF3366;
 	--color-gx-accent-orange: #FF6600;
 	--color-gx-accent-purple: #9933FF;
+	--color-gx-accent-blue: #3366FF;
 
 	/* Text colors */
 	--color-gx-text-primary: #FFFFFF;
@@ -29,6 +30,7 @@
 
 	/* Border colors */
 	--color-gx-border-default: #2A2A2A;
+	--color-gx-border-hover: #3A3A4A;
 	--color-gx-border-focus: #00FF66;
 	--color-gx-border-subtle: #1F1F1F;
 
@@ -42,6 +44,11 @@
 	--font-sans: 'Inter', system-ui, sans-serif;
 	--font-mono: 'JetBrains Mono', 'Fira Code', monospace;
 
+	/* Glow effects */
+	--gx-glow-sm: 0 0 8px rgba(0, 255, 102, 0.15);
+	--gx-glow-md: 0 0 16px rgba(0, 255, 102, 0.2);
+	--gx-glow-lg: 0 0 32px rgba(0, 255, 102, 0.25);
+
 	/* Custom radius */
 	--radius-gx: 8px;
 	--radius-gx-lg: 12px;
@@ -50,6 +57,48 @@
 /* Opera GX Base Styles */
 :root {
 	color-scheme: dark;
+
+	/* Backgrounds */
+	--color-gx-bg-primary: #0d0d12;
+	--color-gx-bg-secondary: #13131a;
+	--color-gx-bg-tertiary: #1a1a24;
+	--color-gx-bg-elevated: #1e1e2a;
+	--color-gx-bg-hover: #252532;
+
+	/* Neon accent */
+	--color-gx-neon: #00FF66;
+	--color-gx-neon-dim: #00cc52;
+
+	/* Text */
+	--color-gx-text-primary: #e8e8ed;
+	--color-gx-text-secondary: #a0a0b0;
+	--color-gx-text-muted: #606070;
+
+	/* Borders */
+	--color-gx-border-default: #2a2a3a;
+	--color-gx-border-hover: #3a3a4a;
+
+	/* Status */
+	--color-gx-status-success: #00FF66;
+	--color-gx-status-warning: #FFB800;
+	--color-gx-status-error: #FF3366;
+	--color-gx-status-info: #3399FF;
+
+	/* Accent colors */
+	--color-gx-accent-purple: #9966FF;
+	--color-gx-accent-magenta: #FF3399;
+	--color-gx-accent-cyan: #00CCFF;
+	--color-gx-accent-orange: #FF8800;
+	--color-gx-accent-blue: #3366FF;
+
+	/* Glow effects */
+	--gx-glow-sm: 0 0 8px rgba(0, 255, 102, 0.15);
+	--gx-glow-md: 0 0 16px rgba(0, 255, 102, 0.2);
+	--gx-glow-lg: 0 0 32px rgba(0, 255, 102, 0.25);
+
+	/* Radius */
+	--radius-gx: 6px;
+	--radius-gx-lg: 10px;
 }
 
 html, body {

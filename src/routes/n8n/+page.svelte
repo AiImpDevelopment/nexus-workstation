@@ -172,6 +172,17 @@
 					Open in Browser
 				</button>
 				<button
+					onclick={() => invoke('open_internal_browser', { url: activeService.url, title: activeService.name })}
+					disabled={!isOnline}
+					class="flex items-center gap-2 px-5 py-2.5 text-sm font-medium rounded-gx transition-all
+						{isOnline
+							? 'border border-gx-neon/30 text-gx-neon hover:bg-gx-neon/10'
+							: 'bg-gx-bg-tertiary text-gx-text-muted border border-gx-border-default cursor-not-allowed'}"
+				>
+					<Globe size={16} />
+					Open in NEXUS
+				</button>
+				<button
 					onclick={() => checkService(activeService)}
 					class="flex items-center gap-2 px-4 py-2.5 text-sm rounded-gx border border-gx-border-default text-gx-text-secondary hover:border-gx-neon hover:text-gx-neon transition-colors"
 				>
