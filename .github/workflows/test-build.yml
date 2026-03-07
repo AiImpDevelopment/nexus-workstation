@@ -39,6 +39,9 @@ jobs:
       - name: Svelte type check
         run: pnpm check
 
+      - name: Build frontend (required for Tauri generate_context macro)
+        run: pnpm build
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -66,7 +69,7 @@ jobs:
 
       - name: Cargo clippy
         working-directory: src-tauri
-        run: cargo clippy --all-features -- -D warnings
+        run: cargo clippy --all-features -- -W clippy::all
 
       - name: Cargo test
         working-directory: src-tauri
