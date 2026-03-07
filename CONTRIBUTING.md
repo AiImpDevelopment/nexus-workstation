@@ -12,7 +12,7 @@ Thank you for your interest in contributing to NEXUS!
 
 ### Quick Start
 ```bash
-git clone https://github.com/TiKcoc/nexus-workstation.git
+git clone https://github.com/AiImpDevelopment/nexus-workstation.git
 cd nexus-workstation
 pnpm install
 pnpm tauri dev

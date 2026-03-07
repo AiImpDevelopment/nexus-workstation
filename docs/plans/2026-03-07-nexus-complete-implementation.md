@@ -67,7 +67,7 @@ git push origin main
 **Step 5: Verify CI passes**
 
 ```bash
-gh run list --repo TiKcoc/nexus-workstation --limit 1
+gh run list --repo AiImpDevelopment/nexus-workstation --limit 1
 ```
 Expected: `in_progress` then `completed success`
 
@@ -121,7 +121,7 @@ git checkout main
 **Step 2: Set branch protection on main**
 
 ```bash
-gh api repos/TiKcoc/nexus-workstation/branches/main/protection \
+gh api repos/AiImpDevelopment/nexus-workstation/branches/main/protection \
   --method PUT \
   --field required_status_checks='{"strict":true,"contexts":["lint-and-check"]}' \
   --field enforce_admins=false \
@@ -132,7 +132,7 @@ gh api repos/TiKcoc/nexus-workstation/branches/main/protection \
 **Step 3: Verify CTreitges has write access**
 
 ```bash
-gh api repos/TiKcoc/nexus-workstation/collaborators --jq '.[].login'
+gh api repos/AiImpDevelopment/nexus-workstation/collaborators --jq '.[].login'
 ```
 Expected: `CTreitges` in list
 
@@ -141,7 +141,7 @@ Expected: `CTreitges` in list
 Create `.github/CODEOWNERS`:
 ```
 # Default owners
-* @TiKcoc
+* @AiImpDevelopment
 
 # Windows-specific
 packaging/windows/ @CTreitges
@@ -555,7 +555,7 @@ pub async fn chat_stream(
     let response = client
         .post("https://openrouter.ai/api/v1/chat/completions")
         .header("Authorization", format!("Bearer {}", key))
-        .header("HTTP-Referer", "https://github.com/TiKcoc/nexus-workstation")
+        .header("HTTP-Referer", "https://github.com/AiImpDevelopment/nexus-workstation")
         .header("X-Title", "NEXUS AI Workstation")
         .json(&serde_json::json!({
             "model": model,

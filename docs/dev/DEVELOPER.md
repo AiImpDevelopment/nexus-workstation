@@ -1,6 +1,6 @@
 # NEXUS Developer Guide
 
-> **Internal document** -- For TiKcoc team members only.
+> **Internal document** -- For AiImpDevelopment team members only.
 
 ## Quick Start
 
@@ -98,5 +98,5 @@ CI/CD: `.github/workflows/test-build.yml` runs on every push. Release workflow b
 - 36 Tauri commands registered
 
 ## Contacts
-- **Lead**: TiKcoc (GitHub)
+- **Lead**: AiImpDevelopment (GitHub)
 - **Dev**: Christof Treitges (christof.treitges@outlook.de)

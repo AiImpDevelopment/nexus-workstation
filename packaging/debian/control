@@ -4,9 +4,9 @@ Section: devel
 Priority: optional
 Architecture: amd64
 Depends: libwebkit2gtk-4.1-0, libgtk-3-0, libappindicator3-1, librsvg2-2
-Maintainer: TiKcoc <tikcoc@users.noreply.github.com>
+Maintainer: AiImp Development <AiImpDev@protonmail.com>
 Description: NEXUS AI Workstation
  Your complete AI stack. One desktop app.
  Chat with 28+ free AI models, manage Docker containers,
  orchestrate agents, automate workflows, and write code.
-Homepage: https://github.com/TiKcoc/nexus-workstation
+Homepage: https://github.com/AiImpDevelopment/nexus-workstation
