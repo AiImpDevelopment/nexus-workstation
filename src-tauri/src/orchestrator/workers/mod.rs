@@ -11,6 +11,13 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+use super::brain::{
+    ClsMemory, ClsReplayEngine, FsrsCard, FsrsScheduler, MemoryLayer, Rating, TeleMemPipeline,
+    ZettelIndex, ZettelNote,
+};
+use super::store::OrchestratorStore;
 
 /// Result of a worker execution
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +40,7 @@ pub enum WorkerStatus {
 pub struct WorkerContext {
     pub ollama_url: String,
     pub data_dir: std::path::PathBuf,
+    pub store: Option<Arc<OrchestratorStore>>,
 }
 
 impl Default for WorkerContext {
@@ -42,6 +50,7 @@ impl Default for WorkerContext {
             data_dir: dirs::data_dir()
                 .unwrap_or_else(|| std::path::PathBuf::from("."))
                 .join("nexus"),
+            store: None,
         }
     }
 }
@@ -844,17 +853,456 @@ stub_worker!(ServiceMapper, "service_mapper", "Maps service dependencies topolog
 // Dedup sweeper (standalone — no Redis, uses SQLite)
 stub_worker!(DedupSweeper, "dedup_sweeper", "Detects and removes duplicate data entries", "cpu");
 
-// Brain v2.0 stubs (complex logic — requires FSRS/CLS integration from brain.rs)
-stub_worker!(MemoryDecayScorer, "memory_decay_scorer", "FSRS-based memory decay scoring", "shell");
-stub_worker!(ClsReplay, "cls_replay", "CLS replay consolidation (hippocampus to neocortex)", "shell");
-stub_worker!(AutoLabeler, "auto_labeler", "NLP pattern detection for auto-labeling content", "cpu");
-stub_worker!(ContextEnricher, "context_enricher", "Contextual retrieval enrichment (Anthropic-style)", "cpu");
+// ════════════════════════════════════════════════════════════════
+// Brain v2.0 — Real Workers (wired to brain.rs + store.rs)
+// ════════════════════════════════════════════════════════════════
+
+/// FSRS-based memory decay scoring — reviews due memories and updates
+/// their stability/difficulty/retrievability using the FSRS-5 algorithm.
+pub struct MemoryDecayScorer;
+
+#[async_trait]
+impl TaskWorker for MemoryDecayScorer {
+    fn name(&self) -> &str { "memory_decay_scorer" }
+    fn description(&self) -> &str { "FSRS-based memory decay scoring" }
+    fn pool(&self) -> &str { "cpu" }
+
+    async fn run(&self, ctx: &WorkerContext) -> WorkerResult {
+        let store = match &ctx.store {
+            Some(s) => s,
+            None => return WorkerResult {
+                status: WorkerStatus::Ok,
+                message: "MemoryDecay: no store (skipped)".to_string(),
+                details: None,
+            },
+        };
+
+        let due = match store.get_memories_due_for_review() {
+            Ok(d) => d,
+            Err(e) => return WorkerResult {
+                status: WorkerStatus::Error,
+                message: format!("MemoryDecay: DB error: {e}"),
+                details: None,
+            },
+        };
+
+        if due.is_empty() {
+            return WorkerResult {
+                status: WorkerStatus::Ok,
+                message: "MemoryDecay: 0 memories due".to_string(),
+                details: None,
+            };
+        }
+
+        let fsrs = FsrsScheduler::new();
+        let mut reviewed = 0u32;
+
+        for mem in &due {
+            let card = FsrsCard {
+                stability: mem.stability,
+                difficulty: mem.difficulty,
+                elapsed_days: (chrono::Utc::now() - mem.last_review).num_seconds() as f64 / 86400.0,
+                scheduled_days: 0.0,
+                reps: mem.reps,
+                lapses: mem.lapses,
+                last_review: mem.last_review,
+            };
+
+            // Auto-rate based on retrievability
+            let r = fsrs.retrievability(card.stability, card.elapsed_days);
+            let rating = if r > 0.9 { Rating::Easy }
+                else if r > 0.7 { Rating::Good }
+                else if r > 0.4 { Rating::Hard }
+                else { Rating::Again };
+
+            let updated = fsrs.review(&card, rating);
+            let next_review = chrono::Utc::now()
+                + chrono::Duration::seconds((updated.scheduled_days * 86400.0) as i64);
+
+            if store.update_memory_fsrs(
+                mem.id, updated.stability, updated.difficulty,
+                fsrs.retrievability(updated.stability, 0.0),
+                &next_review, updated.reps, updated.lapses,
+            ).is_ok() {
+                reviewed += 1;
+            }
+        }
+
+        WorkerResult {
+            status: WorkerStatus::Ok,
+            message: format!("MemoryDecay: reviewed {reviewed}/{} memories", due.len()),
+            details: None,
+        }
+    }
+}
+
+/// CLS replay consolidation — moves mature hippocampal memories to neocortex.
+/// Based on McClelland et al. (1995) complementary learning systems theory.
+pub struct ClsReplay;
+
+#[async_trait]
+impl TaskWorker for ClsReplay {
+    fn name(&self) -> &str { "cls_replay" }
+    fn description(&self) -> &str { "CLS replay consolidation (hippocampus to neocortex)" }
+    fn pool(&self) -> &str { "cpu" }
+
+    async fn run(&self, ctx: &WorkerContext) -> WorkerResult {
+        let store = match &ctx.store {
+            Some(s) => s,
+            None => return WorkerResult {
+                status: WorkerStatus::Ok,
+                message: "ClsReplay: no store (skipped)".to_string(),
+                details: None,
+            },
+        };
+
+        let engine = ClsReplayEngine::default();
+
+        // Load all memories and check for consolidation candidates
+        let memories = match store.get_memories_due_for_review() {
+            Ok(m) => m,
+            Err(e) => return WorkerResult {
+                status: WorkerStatus::Error,
+                message: format!("ClsReplay: DB error: {e}"),
+                details: None,
+            },
+        };
+
+        // Convert to CLS format and find consolidation candidates
+        let cls_memories: Vec<ClsMemory> = memories.iter().map(|m| ClsMemory {
+            key: m.key.clone(),
+            content: m.content.clone(),
+            layer: if m.reps >= 3 { MemoryLayer::Neocortex } else { MemoryLayer::Hippocampus },
+            importance: m.importance,
+            access_count: m.reps,
+            created_at: m.created_at,
+            consolidated_at: if m.reps >= 3 { Some(m.last_review) } else { None },
+        }).collect();
+
+        let candidates = engine.select_for_consolidation(&cls_memories);
+        let consolidated = candidates.len();
+
+        // Boost importance of consolidated memories
+        for key in &candidates {
+            if let Some(mem) = memories.iter().find(|m| &m.key == key) {
+                let new_importance = (mem.importance * 1.2).min(1.0);
+                let _ = store.store_memory(&mem.key, &mem.content, new_importance);
+            }
+        }
+
+        let hippo_count = cls_memories.iter().filter(|m| m.layer == MemoryLayer::Hippocampus).count();
+        let forced = engine.needs_forced_consolidation(hippo_count);
+
+        WorkerResult {
+            status: WorkerStatus::Ok,
+            message: format!(
+                "ClsReplay: consolidated={consolidated}, hippocampus={hippo_count}, forced={forced}"
+            ),
+            details: None,
+        }
+    }
+}
+
+/// Auto-labeler — pattern-based content classification using regex label functions.
+/// Standalone version (no PostgreSQL/pgvector — uses SQLite + regex).
+pub struct AutoLabeler;
+
+#[async_trait]
+impl TaskWorker for AutoLabeler {
+    fn name(&self) -> &str { "auto_labeler" }
+    fn description(&self) -> &str { "NLP pattern detection for auto-labeling content" }
+    fn pool(&self) -> &str { "cpu" }
+
+    async fn run(&self, ctx: &WorkerContext) -> WorkerResult {
+        let store = match &ctx.store {
+            Some(s) => s,
+            None => return WorkerResult {
+                status: WorkerStatus::Ok,
+                message: "AutoLabeler: no store (skipped)".to_string(),
+                details: None,
+            },
+        };
+
+        // Fetch recent task logs and classify them
+        let logs = match store.get_recent_logs(50) {
+            Ok(l) => l,
+            Err(e) => return WorkerResult {
+                status: WorkerStatus::Error,
+                message: format!("AutoLabeler: DB error: {e}"),
+                details: None,
+            },
+        };
+
+        let mut labeled = 0u32;
+        for log in &logs {
+            // Pattern-based classification (Tier 1 regex LFs)
+            let label = if log.worker_name.contains("security") || log.worker_name.contains("sentinel") {
+                "SECURITY"
+            } else if log.worker_name.contains("code") || log.worker_name.contains("commit") {
+                "CODE"
+            } else if log.worker_name.contains("perf") || log.worker_name.contains("vram") {
+                "MONITORING"
+            } else if log.worker_name.contains("config") || log.worker_name.contains("drift") {
+                "INFRASTRUCTURE"
+            } else {
+                "DATA"
+            };
+
+            // Store the classification as an event
+            let payload = format!(
+                r#"{{"worker":"{}","label":"{}","status":"{}"}}"#,
+                log.worker_name, label, log.status
+            );
+            if store.log_event("auto_label", &payload).is_ok() {
+                labeled += 1;
+            }
+        }
+
+        WorkerResult {
+            status: WorkerStatus::Ok,
+            message: format!("AutoLabeler: labeled {labeled}/{} entries", logs.len()),
+            details: None,
+        }
+    }
+}
+
+/// Context enricher — generates contextual prefixes for memories using Ollama.
+/// Based on Anthropic's Contextual Retrieval method (+49% retrieval quality).
+pub struct ContextEnricher;
+
+#[async_trait]
+impl TaskWorker for ContextEnricher {
+    fn name(&self) -> &str { "context_enricher" }
+    fn description(&self) -> &str { "Contextual retrieval enrichment (Anthropic-style)" }
+    fn pool(&self) -> &str { "cpu" }
+
+    async fn run(&self, ctx: &WorkerContext) -> WorkerResult {
+        let store = match &ctx.store {
+            Some(s) => s,
+            None => return WorkerResult {
+                status: WorkerStatus::Ok,
+                message: "ContextEnricher: no store (skipped)".to_string(),
+                details: None,
+            },
+        };
+
+        // Get memories that could benefit from enrichment (low reps = new)
+        let memories = match store.get_memories_due_for_review() {
+            Ok(m) => m,
+            Err(_) => return WorkerResult {
+                status: WorkerStatus::Ok,
+                message: "ContextEnricher: no memories to enrich".to_string(),
+                details: None,
+            },
+        };
+
+        let unenriched: Vec<_> = memories.iter()
+            .filter(|m| m.reps == 0 && !m.content.starts_with("[CTX]"))
+            .collect();
+
+        if unenriched.is_empty() {
+            return WorkerResult {
+                status: WorkerStatus::Ok,
+                message: "ContextEnricher: all memories enriched".to_string(),
+                details: None,
+            };
+        }
+
+        // Try to call Ollama for contextual prefix generation
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .unwrap_or_default();
+
+        let mut enriched = 0u32;
+        let mut errors = 0u32;
+
+        for mem in unenriched.iter().take(10) {
+            let prompt = format!(
+                "Write ONE concise sentence describing what this knowledge entry is about:\n\n{}\n\nContextual prefix:",
+                &mem.content[..mem.content.len().min(500)]
+            );
+
+            let resp = client.post(format!("{}/api/generate", ctx.ollama_url))
+                .json(&serde_json::json!({
+                    "model": "hermes3:latest",
+                    "prompt": prompt,
+                    "stream": false,
+                    "options": {"temperature": 0.3, "num_predict": 80}
+                }))
+                .send()
+                .await;
+
+            match resp {
+                Ok(r) if r.status().is_success() => {
+                    if let Ok(body) = r.json::<serde_json::Value>().await {
+                        if let Some(prefix) = body["response"].as_str() {
+                            let prefix = prefix.trim();
+                            if prefix.len() > 10 {
+                                let enriched_content = format!("[CTX] {} | {}", prefix, mem.content);
+                                let _ = store.store_memory(&mem.key, &enriched_content, mem.importance);
+                                enriched += 1;
+                            }
+                        }
+                    }
+                }
+                _ => { errors += 1; }
+            }
+        }
+
+        WorkerResult {
+            status: if errors > enriched { WorkerStatus::Error } else { WorkerStatus::Ok },
+            message: format!(
+                "ContextEnricher: enriched={enriched}, errors={errors}, pending={}",
+                unenriched.len().saturating_sub(enriched as usize)
+            ),
+            details: None,
+        }
+    }
+}
+
+/// Zettelkasten cross-reference indexer — builds tag/link index from memories.
+pub struct ZettelkastenIndexer;
+
+#[async_trait]
+impl TaskWorker for ZettelkastenIndexer {
+    fn name(&self) -> &str { "zettelkasten_indexer" }
+    fn description(&self) -> &str { "A-MEM Zettelkasten cross-reference indexing" }
+    fn pool(&self) -> &str { "cpu" }
+
+    async fn run(&self, ctx: &WorkerContext) -> WorkerResult {
+        let store = match &ctx.store {
+            Some(s) => s,
+            None => return WorkerResult {
+                status: WorkerStatus::Ok,
+                message: "Zettelkasten: no store (skipped)".to_string(),
+                details: None,
+            },
+        };
+
+        let memories = match store.get_memories_due_for_review() {
+            Ok(m) => m,
+            Err(e) => return WorkerResult {
+                status: WorkerStatus::Error,
+                message: format!("Zettelkasten: DB error: {e}"),
+                details: None,
+            },
+        };
+
+        let mut index = ZettelIndex::new();
+
+        for mem in &memories {
+            // Extract tags from content using simple word-boundary patterns
+            let mut tags = Vec::new();
+            let lower = mem.content.to_lowercase();
+            for keyword in &["rust", "svelte", "tauri", "ai", "gpu", "docker", "git", "test", "security", "config"] {
+                if lower.contains(keyword) {
+                    tags.push(keyword.to_string());
+                }
+            }
+            if tags.is_empty() {
+                tags.push("general".to_string());
+            }
+
+            index.add_note(ZettelNote {
+                id: mem.id.to_string(),
+                title: mem.key.clone(),
+                content: mem.content.clone(),
+                tags,
+                links: vec![],
+                created_at: mem.created_at,
+                updated_at: mem.last_review,
+            });
+        }
+
+        let stats = index.tag_stats();
+        let top_tags: Vec<String> = stats.iter().take(5)
+            .map(|(t, c)| format!("{t}:{c}"))
+            .collect();
+
+        WorkerResult {
+            status: WorkerStatus::Ok,
+            message: format!(
+                "Zettelkasten: indexed {} notes, {} tags [{}]",
+                index.note_count(),
+                stats.len(),
+                top_tags.join(", ")
+            ),
+            details: None,
+        }
+    }
+}
+
+/// TeleMem pipeline — decides ADD/UPDATE/DELETE/NOOP for incoming data.
+pub struct TelememPipeline;
+
+#[async_trait]
+impl TaskWorker for TelememPipeline {
+    fn name(&self) -> &str { "telemem_pipeline" }
+    fn description(&self) -> &str { "TeleMem ADD/UPDATE/DELETE/NOOP memory management" }
+    fn pool(&self) -> &str { "cpu" }
+
+    async fn run(&self, ctx: &WorkerContext) -> WorkerResult {
+        let store = match &ctx.store {
+            Some(s) => s,
+            None => return WorkerResult {
+                status: WorkerStatus::Ok,
+                message: "TeleMem: no store (skipped)".to_string(),
+                details: None,
+            },
+        };
+
+        // Check recent events for new data that needs TeleMem processing
+        let events = match store.get_recent_events(20) {
+            Ok(e) => e,
+            Err(e) => return WorkerResult {
+                status: WorkerStatus::Error,
+                message: format!("TeleMem: DB error: {e}"),
+                details: None,
+            },
+        };
+
+        let mut adds = 0u32;
+        let mut updates = 0u32;
+        let mut noops = 0u32;
+
+        for event in &events {
+            if event.event_type == "telemem_processed" {
+                continue; // Already processed
+            }
+
+            let key = format!("event_{}", event.id);
+            let decision = TeleMemPipeline::decide(
+                &key,
+                &event.payload,
+                None, // Would check existing memory in production
+                0.0,  // No similarity check without embeddings
+            );
+
+            match decision.operation {
+                super::super::brain::TeleMemOp::Add => {
+                    let _ = store.store_memory(&key, &event.payload, 0.5);
+                    adds += 1;
+                }
+                super::super::brain::TeleMemOp::Update => { updates += 1; }
+                super::super::brain::TeleMemOp::Noop => { noops += 1; }
+                super::super::brain::TeleMemOp::Delete => {}
+            }
+        }
+
+        WorkerResult {
+            status: WorkerStatus::Ok,
+            message: format!("TeleMem: add={adds}, update={updates}, noop={noops}"),
+            details: None,
+        }
+    }
+}
+
+// Remaining Brain workers (lower complexity — stub until embedding support)
 stub_worker!(KgTemporalUpdater, "kg_temporal_updater", "Knowledge graph temporal edge updates", "cpu");
 stub_worker!(DigestProcessor, "digest_processor", "Processes pending digest queue", "cpu");
 stub_worker!(RlmSessionManager, "rlm_session_manager", "Manages RLM sessions for large contexts", "shell");
 stub_worker!(ContextCacheWarmer, "context_cache_warmer", "Pre-computes frequently accessed contexts", "shell");
-stub_worker!(ZettelkastenIndexer, "zettelkasten_indexer", "A-MEM Zettelkasten cross-reference indexing", "cpu");
-stub_worker!(TelememPipeline, "telemem_pipeline", "TeleMem ADD/UPDATE/DELETE/NOOP memory management", "cpu");
 
 /// Create all 42 workers
 pub fn create_all_workers() -> Vec<Box<dyn TaskWorker>> {

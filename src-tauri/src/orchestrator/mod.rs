@@ -98,6 +98,7 @@ impl NexusOrchestrator {
         let db_path = data_dir.join("nexus_orchestrator.db");
         let store = OrchestratorStore::open(&db_path)
             .map_err(|e| format!("Failed to open database: {e}"))?;
+        let store_arc = Arc::new(store);
 
         let mut health_loop = MapeKLoop::new();
         health_loop.register_defaults();
@@ -113,7 +114,7 @@ impl NexusOrchestrator {
 
         // Load trust scores from DB
         let mut trust_manager = HebbianTrustManager::new();
-        if let Ok(records) = store.get_all_trust() {
+        if let Ok(records) = store_arc.get_all_trust() {
             let trust_data: Vec<_> = records.iter()
                 .map(|r| (r.worker_name.clone(), r.score, r.successes, r.failures))
                 .collect();
@@ -123,7 +124,7 @@ impl NexusOrchestrator {
         Ok(Self {
             running: Arc::new(RwLock::new(false)),
             started_at: Arc::new(RwLock::new(None)),
-            store: Arc::new(store),
+            store: Arc::clone(&store_arc),
             trust_manager: Arc::new(RwLock::new(trust_manager)),
             health_loop: Arc::new(RwLock::new(health_loop)),
             event_bus: Arc::new(EventBus::new()),
@@ -133,6 +134,7 @@ impl NexusOrchestrator {
                 ollama_url: std::env::var("OLLAMA_URL")
                     .unwrap_or_else(|_| "http://localhost:11434".to_string()),
                 data_dir,
+                store: Some(Arc::clone(&store_arc)),
             }),
             last_run: Arc::new(RwLock::new(HashMap::new())),
             task_handles: Arc::new(RwLock::new(Vec::new())),
